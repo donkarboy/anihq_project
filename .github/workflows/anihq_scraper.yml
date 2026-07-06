@@ -3,11 +3,19 @@ name: anihq Scraper
 on:
   schedule:
     - cron: "*/20 * * * *"   # Every 20 minutes
-  workflow_dispatch:          # Manual trigger from GitHub UI
+  workflow_dispatch:          # Manual "Run workflow" button in the Actions tab
+
+# Prevents overlapping runs. A 500-URL batch can take longer than the 20-min
+# cron interval — without this, two runs can race on `git push` and one run's
+# processed/failed URLs get silently dropped when its push is rejected.
+concurrency:
+  group: anihq-scraper
+  cancel-in-progress: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write
 
@@ -37,5 +45,16 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "scrape: batch update $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
+
+            # Retry the push a few times with a rebase in between, in case
+            # another run (scheduled or manual) pushed in the meantime.
+            for i in 1 2 3 4 5; do
+              if git push; then
+                echo "Push succeeded."
+                break
+              fi
+              echo "Push rejected (attempt $i) — pulling and retrying..."
+              git pull --rebase --autostash origin "$(git rev-parse --abbrev-ref HEAD)"
+              sleep 3
+            done
           fi
