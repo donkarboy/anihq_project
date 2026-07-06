@@ -551,12 +551,22 @@ def main():
         attempts     = 0
         max_attempts = len(PROXIES) * 2
 
+        last_reason = "all proxies failed"
+
         while attempts < max_attempts and not success:
             proxy = pick_proxy(proxy_idx)
             host  = proxy.split("@")[1] if "@" in proxy else proxy
             print(f"  [PROXY] {host}")
             try:
                 rec = scrape_episode(url, serial, proxy)
+
+                # A page that loads with no exception but yields ZERO stream
+                # or m3u8 URLs is NOT a real success — treat it as a failure
+                # so it gets logged and retried on another proxy instead of
+                # silently being written to processed_urls with empty data.
+                if not rec["stream_urls"] and not rec["m3u8_urls"]:
+                    raise ValueError("page loaded but no stream/m3u8 URLs found")
+
                 new_records.append(rec)
                 new_texts.append(format_readable(rec))
                 append_line(proc_out, url)
@@ -565,15 +575,16 @@ def main():
                 success   = True
                 print("  [OK] ✓\n")
             except Exception as exc:
-                attempts  += 1
-                proxy_idx += 1
+                attempts    += 1
+                proxy_idx   += 1
+                last_reason  = str(exc)
                 print(f"  [RETRY] {exc}")
                 time.sleep(2)
 
         if not success:
             err_count += 1
-            append_line(fail_out, f"{url}  # all proxies failed")
-            print("  [FAILED] all proxies exhausted\n")
+            append_line(fail_out, f"{url}  # {last_reason}")
+            print(f"  [FAILED] {last_reason}\n")
         else:
             # Re-check paths after every success — files may have crossed 700 KB
             json_out = next_output_path(OUT_STREAM_JSON, ".json")
